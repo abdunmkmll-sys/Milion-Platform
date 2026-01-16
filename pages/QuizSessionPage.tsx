@@ -25,21 +25,8 @@ const QuizSessionPage: React.FC<Props> = ({ t, lang }) => {
   const [isFinished, setIsFinished] = useState(false);
   const [correctAnswersCount, setCorrectAnswersCount] = useState(0);
 
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    const fetch = async () => {
-      const filters = {
-        language: lang,
-        category: searchParams.get('cat') || 'general',
-        difficulty: searchParams.get('diff') || 'medium'
-      };
-      const qs = await StorageService.getQuestions(filters);
-      setQuestions(qs);
-      setLoading(false);
-    };
-    fetch();
-  }, [lang, searchParams]);
+  // Fix: Replaced NodeJS.Timeout with ReturnType<typeof setInterval> to avoid namespace error in the browser environment
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (loading || isFinished || questions.length === 0) return;
