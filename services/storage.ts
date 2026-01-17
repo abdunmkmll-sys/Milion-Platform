@@ -13,7 +13,8 @@ import {
   doc,
   setDoc,
   enableIndexedDbPersistence,
-  getCountFromServer
+  getCountFromServer,
+  writeBatch
 } from "firebase/firestore";
 import { Question, LeaderboardEntry, CommunityComment } from '../types';
 import { BUILT_IN_QUESTIONS } from '../constants';
@@ -104,13 +105,27 @@ export const StorageService = {
   saveQuestion: async (question: Question) => {
     try {
       const { id, ...data } = question;
-      if (id && !id.startsWith('q_')) {
+      if (id && !id.startsWith('q_') && !id.startsWith('b_') && !id.startsWith('s') && !id.startsWith('h') && !id.startsWith('g') && !id.startsWith('m') && !id.startsWith('r')) {
         await setDoc(doc(db, COLLECTIONS.QUESTIONS, id), data);
       } else {
         await addDoc(collection(db, COLLECTIONS.QUESTIONS), data);
       }
     } catch (error) {
       console.error("Error saving question:", error);
+    }
+  },
+
+  batchSaveQuestions: async (questions: Question[]) => {
+    try {
+      const batch = writeBatch(db);
+      questions.forEach((q) => {
+        const { id, ...data } = q;
+        const newRef = doc(collection(db, COLLECTIONS.QUESTIONS));
+        batch.set(newRef, data);
+      });
+      await batch.commit();
+    } catch (error) {
+      console.error("Error batch saving questions:", error);
     }
   },
 

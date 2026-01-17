@@ -2,10 +2,13 @@
 import React, { useState, useEffect } from 'react';
 import { Question, Language, Category, Difficulty, LeaderboardEntry, CommunityComment } from '../types';
 import { StorageService } from '../services/storage';
+import { BUILT_IN_QUESTIONS } from '../constants';
+import { GoogleGenAI, Type } from "@google/genai";
 import { 
   Plus, Trash2, Check, Eye, X, Upload, Lock, Unlock, 
   LayoutDashboard, BookOpen, Trophy, MessageSquare, 
-  ChevronRight, Search, BarChart3, Edit2, Download, ShieldCheck, RotateCcw
+  ChevronRight, Search, BarChart3, Edit2, Download, ShieldCheck, RotateCcw,
+  Sparkles, Zap, Database
 } from 'lucide-react';
 
 interface Props {
@@ -13,7 +16,7 @@ interface Props {
   lang: Language;
 }
 
-type AdminTab = 'overview' | 'questions' | 'leaderboard' | 'community';
+type AdminTab = 'overview' | 'questions' | 'leaderboard' | 'community' | 'lab';
 
 const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -26,6 +29,12 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
   const [comments, setComments] = useState<CommunityComment[]>([]);
   const [stats, setStats] = useState({ questions: 0, scores: 0, comments: 0 });
   const [loading, setLoading] = useState(false);
+
+  // AI Lab States
+  const [aiLoading, setAiLoading] = useState(false);
+  const [labCategory, setLabCategory] = useState<Category>('science');
+  const [labDiff, setLabDiff] = useState<Difficulty>('medium');
+  const [labLang, setLabLang] = useState<Language>('ar');
 
   // UI States
   const [isAdding, setIsAdding] = useState(false);
@@ -86,23 +95,68 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
     setFormData({ language: 'ar', category: 'general', difficulty: 'medium', options: ['', '', '', ''], correctIndex: 0, questionText: '' });
   };
 
+  const generateAIQuestions = async () => {
+    setAiLoading(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const prompt = `Generate 10 high-quality educational quiz questions for a platform called Milion. 
+      Category: ${labCategory}
+      Difficulty: ${labDiff}
+      Language: ${labLang === 'ar' ? 'Arabic' : 'English'}
+      Format: Strict JSON. Each question must have questionText, options (array of 4), correctIndex (0-3), and a brief explanation.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                questionText: { type: Type.STRING },
+                options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                correctIndex: { type: Type.INTEGER },
+                explanation: { type: Type.STRING }
+              },
+              required: ["questionText", "options", "correctIndex"]
+            }
+          }
+        }
+      });
+
+      const generatedData = JSON.parse(response.text || '[]');
+      const formattedQuestions: Question[] = generatedData.map((q: any) => ({
+        ...q,
+        id: 'ai_' + Math.random().toString(36).substr(2, 9),
+        category: labCategory,
+        difficulty: labDiff,
+        language: labLang
+      }));
+
+      await StorageService.batchSaveQuestions(formattedQuestions);
+      alert(lang === 'ar' ? `تم توليد وحفظ ${formattedQuestions.length} سؤال بنجاح!` : `Successfully generated and saved ${formattedQuestions.length} questions!`);
+      await loadAllData();
+    } catch (error) {
+      console.error("AI Generation failed:", error);
+      alert("AI Generation failed. Check console for details.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const pushSeedsToFirestore = async () => {
+    if (confirm(lang === 'ar' ? 'هل تريد رفع جميع الأسئلة الافتراضية إلى السحابة؟' : 'Push all built-in questions to cloud?')) {
+      await StorageService.batchSaveQuestions(BUILT_IN_QUESTIONS);
+      await loadAllData();
+      alert(lang === 'ar' ? 'تم الرفع بنجاح' : 'Push successful');
+    }
+  };
+
   const handleDeleteQ = async (id: string) => {
     if (confirm(lang === 'ar' ? 'هل أنت متأكد من الحذف؟' : 'Are you sure?')) {
       await StorageService.deleteQuestion(id);
-      await loadAllData();
-    }
-  };
-
-  const handleDeleteScore = async (id: string) => {
-    if (confirm(lang === 'ar' ? 'حذف هذه النتيجة؟' : 'Delete this score?')) {
-      await StorageService.deleteScore(id);
-      await loadAllData();
-    }
-  };
-
-  const handleDeleteComment = async (id: string) => {
-    if (confirm(lang === 'ar' ? 'حذف هذا التعليق؟' : 'Delete this comment?')) {
-      await StorageService.deleteComment(id);
       await loadAllData();
     }
   };
@@ -149,7 +203,6 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
 
   return (
     <div className="max-w-6xl mx-auto pb-20 animate-fade-in">
-      {/* Admin Header */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 mb-10">
         <div>
           <h2 className="text-4xl font-black flex items-center gap-3">
@@ -169,15 +222,14 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
         </div>
       </div>
 
-      {/* Admin Tabs */}
       <div className="flex gap-2 mb-8 overflow-x-auto no-scrollbar pb-2">
         <TabButton active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} icon={<LayoutDashboard size={18}/>} label={lang === 'ar' ? 'نظرة عامة' : 'Overview'} />
         <TabButton active={activeTab === 'questions'} onClick={() => setActiveTab('questions')} icon={<BookOpen size={18}/>} label={t('selectCategory')} />
+        <TabButton active={activeTab === 'lab'} onClick={() => setActiveTab('lab')} icon={<Zap size={18}/>} label={lang === 'ar' ? 'مختبر الأسئلة' : 'AI Lab'} />
         <TabButton active={activeTab === 'leaderboard'} onClick={() => setActiveTab('leaderboard')} icon={<Trophy size={18}/>} label={t('leaderboard')} />
         <TabButton active={activeTab === 'community'} onClick={() => setActiveTab('community')} icon={<MessageSquare size={18}/>} label={t('community')} />
       </div>
 
-      {/* Tab Content */}
       <div className="space-y-8">
         {activeTab === 'overview' && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in">
@@ -205,23 +257,66 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
             </div>
 
             <div className="glass p-8 rounded-[2.5rem] flex flex-col items-center justify-center text-center space-y-4">
-               <Download size={48} className="text-indigo-400 opacity-20" />
-               <h3 className="font-bold">{lang === 'ar' ? 'تصدير البيانات' : 'Export Data'}</h3>
-               <p className="text-xs opacity-50 px-4">{lang === 'ar' ? 'يمكنك تصدير كافة الأسئلة بصيغة JSON' : 'Download all platform questions as JSON'}</p>
+               <Database size={48} className="text-indigo-400 opacity-20" />
+               <h3 className="font-bold">{lang === 'ar' ? 'مزامنة البيانات' : 'Sync Data'}</h3>
+               <p className="text-xs opacity-50 px-4">{lang === 'ar' ? 'رفع الأسئلة المدمجة إلى قاعدة البيانات السحابية' : 'Push internal seed questions to your cloud Firestore database.'}</p>
                <button 
-                onClick={() => {
-                  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(questions));
-                  const downloadAnchorNode = document.createElement('a');
-                  downloadAnchorNode.setAttribute("href", dataStr);
-                  downloadAnchorNode.setAttribute("download", "milion_questions.json");
-                  document.body.appendChild(downloadAnchorNode);
-                  downloadAnchorNode.click();
-                  downloadAnchorNode.remove();
-                }}
-                className="w-full py-3 bg-white/10 rounded-2xl text-sm font-bold hover:bg-white/20 transition-colors"
+                onClick={pushSeedsToFirestore}
+                className="w-full py-3 bg-white/10 rounded-2xl text-sm font-bold hover:bg-white/20 transition-colors flex items-center justify-center gap-2"
                >
-                 JSON Export
+                 <Upload size={16} />
+                 Push Seeds to Cloud
                </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'lab' && (
+          <div className="glass p-8 rounded-[2.5rem] space-y-8 animate-fade-in border-indigo-500/20 shadow-xl shadow-indigo-500/5">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-indigo-500 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                <Sparkles className="text-white" size={24} />
+              </div>
+              <div>
+                <h3 className="text-2xl font-black">{lang === 'ar' ? 'توليد الأسئلة بالذكاء الاصطناعي' : 'AI Question Lab'}</h3>
+                <p className="text-sm opacity-50">{lang === 'ar' ? 'استخدم Gemini 3 Flash لإنشاء دفعات كبيرة من الأسئلة' : 'Use Gemini 3 Flash to create large batches of high-quality questions instantly.'}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+               <SelectField label={t('selectCategory')} value={labCategory} onChange={(v: string) => setLabCategory(v as Category)} options={['science', 'history', 'math', 'geography', 'religion', 'general']} t={t} />
+               <SelectField label={t('selectDifficulty')} value={labDiff} onChange={(v: string) => setLabDiff(v as Difficulty)} options={['easy', 'medium', 'hard']} t={t} />
+               <SelectField label={t('selectLang')} value={labLang} onChange={(v: string) => setLabLang(v as Language)} options={['ar', 'en']} t={t} />
+            </div>
+
+            <button
+              onClick={generateAIQuestions}
+              disabled={aiLoading}
+              className={`w-full py-6 rounded-3xl font-black text-xl flex items-center justify-center gap-3 transition-all ${aiLoading ? 'bg-white/5 opacity-50 cursor-not-allowed' : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:shadow-2xl hover:shadow-indigo-500/40 hover:-translate-y-1 active:scale-95'}`}
+            >
+              {aiLoading ? (
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                  {lang === 'ar' ? 'جاري التوليد...' : 'Generating Batch...'}
+                </div>
+              ) : (
+                <>
+                  <Sparkles size={24} />
+                  {lang === 'ar' ? 'توليد 10 أسئلة جديدة وحفظها' : 'Generate & Save 10 Questions'}
+                </>
+              )}
+            </button>
+
+            <div className="p-6 bg-indigo-500/10 rounded-2xl border border-indigo-500/20 text-sm">
+              <p className="font-bold mb-2 flex items-center gap-2">
+                <Zap size={16} className="text-indigo-400" />
+                {lang === 'ar' ? 'كيف يعمل هذا؟' : 'How does this work?'}
+              </p>
+              <p className="opacity-70 leading-relaxed">
+                {lang === 'ar' 
+                  ? 'سيقوم النظام بالاتصال بـ Gemini API لإنشاء 10 أسئلة فريدة بناءً على اختياراتك. سيتم فحص الأسئلة وحفظها مباشرة في قاعدة البيانات، وستظهر فوراً للاعبين.' 
+                  : 'The system will connect to the Gemini API to generate 10 unique questions based on your selections. Questions are automatically formatted and saved directly to Firestore, becoming instantly available to players.'}
+              </p>
             </div>
           </div>
         )}
@@ -242,22 +337,28 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
             </div>
 
             <div className="grid grid-cols-1 gap-4">
-              {filteredQuestions.map(q => (
-                <div key={q.id} className="glass p-6 rounded-[2rem] flex flex-col md:flex-row md:items-center justify-between gap-4 group hover:border-indigo-500/30 transition-all">
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap gap-2">
-                       <Badge label={t(q.category)} color="indigo" />
-                       <Badge label={t(q.difficulty)} color="purple" />
-                       <Badge label={q.language.toUpperCase()} color="gray" />
-                    </div>
-                    <h4 className="text-lg font-bold">{q.questionText}</h4>
-                  </div>
-                  <div className="flex gap-2">
-                     <button onClick={() => handleEdit(q)} className="p-4 glass rounded-2xl text-indigo-400 hover:bg-indigo-500/20 transition-colors"><Edit2 size={20} /></button>
-                     <button onClick={() => handleDeleteQ(q.id)} className="p-4 glass rounded-2xl text-red-400 hover:bg-red-500/20 transition-colors"><Trash2 size={20} /></button>
-                  </div>
+              {filteredQuestions.length === 0 ? (
+                <div className="p-20 text-center glass rounded-3xl opacity-30 italic">
+                  {lang === 'ar' ? 'لا توجد أسئلة. استخدم المختبر لتوليد بعضها!' : 'No questions found. Use the Lab to generate some!'}
                 </div>
-              ))}
+              ) : (
+                filteredQuestions.map(q => (
+                  <div key={q.id} className="glass p-6 rounded-[2rem] flex flex-col md:flex-row md:items-center justify-between gap-4 group hover:border-indigo-500/30 transition-all">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                         <Badge label={t(q.category)} color="indigo" />
+                         <Badge label={t(q.difficulty)} color="purple" />
+                         <Badge label={q.language.toUpperCase()} color="gray" />
+                      </div>
+                      <h4 className="text-lg font-bold">{q.questionText}</h4>
+                    </div>
+                    <div className="flex gap-2">
+                       <button onClick={() => handleEdit(q)} className="p-4 glass rounded-2xl text-indigo-400 hover:bg-indigo-500/20 transition-colors"><Edit2 size={20} /></button>
+                       <button onClick={() => handleDeleteQ(q.id)} className="p-4 glass rounded-2xl text-red-400 hover:bg-red-500/20 transition-colors"><Trash2 size={20} /></button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
@@ -286,7 +387,7 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
                     </td>
                     <td className="px-8 py-4 text-indigo-400 font-black">{s.score}</td>
                     <td className="px-8 py-4 text-end">
-                      <button onClick={() => handleDeleteScore(s.id)} className="p-2 text-red-400 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 rounded-lg transition-all"><Trash2 size={16}/></button>
+                      <button onClick={() => StorageService.deleteScore(s.id).then(loadAllData)} className="p-2 text-red-400 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 rounded-lg transition-all"><Trash2 size={16}/></button>
                     </td>
                   </tr>
                 ))}
@@ -308,7 +409,7 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
                           <p className="text-sm text-white/70 mt-1">{c.text}</p>
                        </div>
                     </div>
-                    <button onClick={() => handleDeleteComment(c.id)} className="p-4 text-red-400 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 rounded-2xl transition-all"><Trash2 size={20}/></button>
+                    <button onClick={() => StorageService.deleteComment(c.id).then(loadAllData)} className="p-4 text-red-400 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 rounded-2xl transition-all"><Trash2 size={20}/></button>
                  </div>
                ))}
             </div>
@@ -316,7 +417,6 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
         )}
       </div>
 
-      {/* Question Form Overlay */}
       {isAdding && (
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="glass w-full max-w-2xl rounded-[2.5rem] p-8 space-y-6 relative animate-fade-in shadow-2xl border-white/20">
@@ -335,9 +435,9 @@ const AdminDashboard: React.FC<Props> = ({ t, lang }) => {
                 />
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <SelectField label={t('selectCategory')} value={formData.category} onChange={v => setFormData({...formData, category: v as Category})} options={['science', 'history', 'math', 'geography', 'religion', 'general']} t={t} />
-                  <SelectField label={t('selectDifficulty')} value={formData.difficulty} onChange={v => setFormData({...formData, difficulty: v as Difficulty})} options={['easy', 'medium', 'hard']} t={t} />
-                  <SelectField label={t('selectLang')} value={formData.language} onChange={v => setFormData({...formData, language: v as Language})} options={['ar', 'en']} t={t} />
+                  <SelectField label={t('selectCategory')} value={formData.category} onChange={(v: string) => setFormData({...formData, category: v as Category})} options={['science', 'history', 'math', 'geography', 'religion', 'general']} t={t} />
+                  <SelectField label={t('selectDifficulty')} value={formData.difficulty} onChange={(v: string) => setFormData({...formData, difficulty: v as Difficulty})} options={['easy', 'medium', 'hard']} t={t} />
+                  <SelectField label={t('selectLang')} value={formData.language} onChange={(v: string) => setFormData({...formData, language: v as Language})} options={['ar', 'en']} t={t} />
                 </div>
 
                 <div className="space-y-3">
